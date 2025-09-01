@@ -1,7 +1,8 @@
-import { Server, Socket } from 'socket.io';
-import { WebSocketEvents, SupportedLanguage } from '../types';
-import databaseService from './databaseService';
-import openaiService from './openaiService';
+import { Server as SocketIOServer, Socket } from 'socket.io';
+import { Server as HTTPServer } from 'http';
+import { openaiService } from './openaiService';
+import { databaseService } from './databaseService';
+import { SupportedLanguage } from '../types';
 
 interface ConnectedUser {
   socketId: string;
@@ -11,12 +12,12 @@ interface ConnectedUser {
 }
 
 class WebSocketService {
-  private io: Server;
+  private io: SocketIOServer;
   private connectedUsers: Map<string, ConnectedUser> = new Map();
   private roomListeners: Map<string, Set<string>> = new Map(); // roomCode -> Set of socketIds
   private activeTranscriptions: Map<string, boolean> = new Map(); // roomCode -> isActive
 
-  constructor(io: Server) {
+  constructor(io: SocketIOServer) {
     this.io = io;
   }
 
@@ -50,6 +51,16 @@ class WebSocketService {
         } catch (error) {
           console.error('Transcript processing error:', error);
           socket.emit('error', { message: 'Failed to process transcript' });
+        }
+      });
+
+      // Handle audio chunks from MediaRecorder (iOS/Safari fallback)
+      socket.on('audio-chunk', async (data: { roomCode: string; audioData: ArrayBuffer }) => {
+        try {
+          await this.handleAudioChunk(socket, data);
+        } catch (error) {
+          console.error('Audio processing error:', error);
+          socket.emit('error', { message: 'Failed to process audio chunk' });
         }
       });
 
@@ -274,6 +285,91 @@ class WebSocketService {
     console.log(`Transcription stopped for room ${roomCode}`);
   }
 
+  private async handleAudioChunk(socket: Socket, data: { roomCode: string; audioData: ArrayBuffer }) {
+    const user = this.connectedUsers.get(socket.id);
+    if (!user || user.role !== 'preacher' || user.roomCode !== data.roomCode) {
+      socket.emit('error', { message: 'Unauthorized to send audio' });
+      return;
+    }
+
+    // Check if transcription is active for this room
+    if (!this.activeTranscriptions.get(data.roomCode)) {
+      return;
+    }
+
+    const { audioData } = data;
+    
+    // Validate audio data
+    if (!audioData || audioData.byteLength === 0) {
+      console.warn('Empty audio data received');
+      return;
+    }
+
+    try {
+      // Get all languages needed for this room
+      const roomListeners = this.roomListeners.get(data.roomCode) || new Set();
+      const targetLanguages = new Set<SupportedLanguage>(['en']); // Always include English
+      
+      // Add languages from all listeners in the room
+      for (const socketId of roomListeners) {
+        const listener = this.connectedUsers.get(socketId);
+        if (listener && listener.role === 'listener' && listener.language) {
+          targetLanguages.add(listener.language);
+        }
+      }
+
+      // Convert ArrayBuffer to Buffer for processing
+      const audioBuffer = Buffer.from(audioData);
+      
+      // Process audio chunk with OpenAI Whisper
+      const result = await openaiService.processAudioChunk(
+        audioBuffer,
+        Array.from(targetLanguages)
+      );
+
+      // Only proceed if we got meaningful text
+      if (!result.originalText || result.originalText.trim().length === 0) {
+        return;
+      }
+
+      // Get room info for database storage
+      const room = await databaseService.getRoomByCode(data.roomCode);
+      if (!room) {
+        socket.emit('error', { message: 'Room not found' });
+        return;
+      }
+
+      // Save transcripts for each language and broadcast to appropriate listeners
+      for (const [language, translatedText] of Object.entries(result.translations)) {
+        try {
+          const transcript = await databaseService.saveTranscript(
+            room.id,
+            result.originalText,
+            language === 'en' ? null : translatedText,
+            language
+          );
+
+          // Broadcast to listeners who want this language
+          for (const socketId of roomListeners) {
+            const listener = this.connectedUsers.get(socketId);
+            if (listener && (
+              (listener.role === 'preacher') || 
+              (listener.role === 'listener' && listener.language === language)
+            )) {
+              this.io.to(socketId).emit('new-transcript', transcript);
+            }
+          }
+        } catch (error) {
+          console.error(`Failed to save/broadcast transcript for language ${language}:`, error);
+        }
+      }
+
+    } catch (error) {
+      console.error('Audio processing error:', error);
+      socket.emit('error', { message: 'Failed to process audio chunk' });
+    }
+  }
+
   private handleDisconnect(socket: Socket) {
     const user = this.connectedUsers.get(socket.id);
     if (user) {
@@ -306,7 +402,7 @@ class WebSocketService {
 
 let websocketService: WebSocketService;
 
-export function setupWebSocket(io: Server) {
+export function setupWebSocket(io: SocketIOServer) {
   websocketService = new WebSocketService(io);
   websocketService.setupEventHandlers();
   return websocketService;
