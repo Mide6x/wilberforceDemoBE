@@ -9,6 +9,7 @@ import cors from 'cors';
 import { setupWebSocket } from './services/websocketService';
 import roomRoutes from './routes/roomRoutes';
 import transcriptRoutes from './routes/transcriptRoutes';
+import healthRoutes from './routes/healthRoutes';
 import { specs, swaggerUi } from './config/swagger';
 
 const app = express();
@@ -64,6 +65,7 @@ app.use('/apidocs', swaggerUi.serve, swaggerUi.setup(specs, {
 }));
 
 // API Routes
+app.use('/api', healthRoutes);
 app.use('/rooms', roomRoutes);
 app.use('/transcripts', transcriptRoutes);
 
