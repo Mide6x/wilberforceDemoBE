@@ -6,6 +6,11 @@ import { Readable } from 'stream';
 
 class OpenAIService {
   private openai: OpenAI;
+  private sessionContexts: Map<string, {
+    fullTranscript: string;
+    audioChunks: Buffer[];
+    lastProcessedTime: number;
+  }> = new Map();
 
   constructor() {
     const apiKey = process.env.OPENAI_API_KEY;
@@ -107,46 +112,152 @@ class OpenAIService {
   }
 
   /**
-   * Process audio chunk: transcribe and translate if needed
+   * Translate text with context for better coherence
+   */
+  private async translateTextWithContext(
+    text: string, 
+    targetLanguage: SupportedLanguage, 
+    context: string
+  ): Promise<string> {
+    try {
+      const targetLanguageName = SUPPORTED_LANGUAGES[targetLanguage];
+      
+      const response = await this.openai.chat.completions.create({
+        model: 'gpt-3.5-turbo',
+        messages: [
+          {
+            role: 'system',
+            content: `You are a professional translator specializing in sermon and religious content. Translate the following text to ${targetLanguageName}. Use the provided context to ensure coherent and contextually appropriate translation. Maintain the original meaning, tone, and religious context. Only return the translation, no explanations.`
+          },
+          {
+            role: 'user',
+            content: `Context: ${context}\n\nTranslate: ${text}`
+          }
+        ],
+        temperature: 0.2,
+        max_tokens: 1000
+      });
+
+      return response.choices[0]?.message?.content?.trim() || text;
+    } catch (error) {
+      console.error('Contextual translation error:', error);
+      // Fallback to regular translation
+      return this.translateText(text, targetLanguage);
+    }
+  }
+
+  /**
+   * Start a new transcription session
+   */
+  startTranscriptionSession(sessionId: string): void {
+    this.sessionContexts.set(sessionId, {
+      fullTranscript: '',
+      audioChunks: [],
+      lastProcessedTime: Date.now()
+    });
+  }
+
+  /**
+   * End transcription session and clean up
+   */
+  endTranscriptionSession(sessionId: string): void {
+    this.sessionContexts.delete(sessionId);
+  }
+
+  /**
+   * Process audio chunk: transcribe and translate if needed with session context
    */
   async processAudioChunk(
+    sessionId: string,
     audioBuffer: Buffer,
     targetLanguages: SupportedLanguage[] = ['en']
   ): Promise<{
     originalText: string;
     translations: Record<string, string>;
+    isComplete: boolean;
   }> {
     try {
-      // First, transcribe the audio
-      const originalText = await this.transcribeAudio(audioBuffer);
-      
-      if (!originalText || originalText.trim().length === 0) {
-        return {
-          originalText: '',
-          translations: {}
-        };
+      const session = this.sessionContexts.get(sessionId);
+      if (!session) {
+        throw new Error('Transcription session not found');
       }
 
-      // Then translate to all requested languages
+      // Add audio chunk to session
+      session.audioChunks.push(audioBuffer);
+      session.lastProcessedTime = Date.now();
+
+      // Combine all audio chunks for context-aware transcription
+      const combinedAudio = Buffer.concat(session.audioChunks);
+      
+      // Create a temporary file for the combined audio
+      const tempFilePath = path.join(__dirname, '../../temp', `audio-session-${sessionId}-${Date.now()}.webm`);
+      
+      // Ensure temp directory exists
+      const tempDir = path.dirname(tempFilePath);
+      if (!fs.existsSync(tempDir)) {
+        fs.mkdirSync(tempDir, { recursive: true });
+      }
+
+      // Write buffer to temporary file
+      fs.writeFileSync(tempFilePath, combinedAudio);
+
+      // Create a readable stream from the file with proper filename
+      const audioStream = fs.createReadStream(tempFilePath);
+      
+      // Add filename property to the stream for OpenAI
+      (audioStream as any).path = tempFilePath;
+
+      // Transcribe with Whisper using full context
+      const transcription = await this.openai.audio.transcriptions.create({
+        file: audioStream,
+        model: 'whisper-1',
+        language: 'en',
+        response_format: 'text',
+        temperature: 0.2
+      });
+
+      // Clean up temp file
+      fs.unlinkSync(tempFilePath);
+
+      const fullText = transcription.trim();
+      if (!fullText) {
+        return { originalText: '', translations: {}, isComplete: false };
+      }
+
+      // Extract only the new part of the transcript
+      const newText = fullText.replace(session.fullTranscript, '').trim();
+      session.fullTranscript = fullText;
+
+      if (!newText) {
+        return { originalText: '', translations: {}, isComplete: false };
+      }
+
+      // Translate the new text
       const translations: Partial<Record<SupportedLanguage, string>> = {};
       
       for (const language of targetLanguages) {
         if (language === 'en') {
-          translations[language] = originalText;
+          translations[language] = newText;
         } else {
           try {
-            translations[language] = await this.translateText(originalText, language);
+            translations[language] = await this.translateText(newText, language);
           } catch (error) {
             console.error(`Failed to translate to ${language}:`, error);
             // Fallback to original text if translation fails
-            translations[language] = originalText;
+            translations[language] = newText;
           }
         }
       }
 
+      // Keep only recent audio chunks to prevent memory issues (last 10 chunks)
+      if (session.audioChunks.length > 10) {
+        session.audioChunks = session.audioChunks.slice(-10);
+      }
+
       return {
-        originalText,
-        translations: translations as Record<string, string>
+        originalText: newText,
+        translations: translations as Record<string, string>,
+        isComplete: false
       };
     } catch (error) {
       console.error('Audio processing error:', error);
