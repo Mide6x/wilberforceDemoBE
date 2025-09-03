@@ -65,6 +65,8 @@ export const SUPPORTED_LANGUAGES = {
   'ko': 'Korean',
   'zh': 'Chinese (Mandarin)',
   'ar': 'Arabic',
+  'hi': 'Hindi',
+  'pa': 'Punjabi',
   'yo': 'Yoruba',
   'st': 'Sesotho (Lesotho)',
   'ur': 'Urdu',
