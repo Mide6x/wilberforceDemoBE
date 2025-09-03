@@ -56,16 +56,25 @@ export const SUPPORTED_LANGUAGES = {
   'es': 'Spanish',
   'fr': 'French',
   'de': 'German',
-  'it': 'Italian',
   'pt': 'Portuguese',
+  'it': 'Italian',
+  'nl': 'Dutch',
+  'pl': 'Polish',
   'ru': 'Russian',
   'ja': 'Japanese',
   'ko': 'Korean',
-  'zh': 'Chinese',
+  'zh': 'Chinese (Mandarin)',
   'ar': 'Arabic',
-  'hi': 'Hindi',
   'yo': 'Yoruba',
-  'st': 'Sesotho (Lesotho)'
+  'st': 'Sesotho (Lesotho)',
+  'ur': 'Urdu',
+  'pcm': 'Nigerian Pidgin',
+  'vi': 'Vietnamese',
+  'ha': 'Hausa',
+  'zu': 'Zulu',
+  'ta': 'Tamil',
+  'af': 'Afrikaans',
+  'mfe': 'Mauritian Creole'
 } as const;
 
 export type SupportedLanguage = keyof typeof SUPPORTED_LANGUAGES;

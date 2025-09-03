@@ -211,7 +211,7 @@ class WebSocketService {
         }
       }
 
-      // Process text for translation
+      // Process the transcript text for translation
       const result = await openaiService.processTranscriptText(
         text,
         Array.from(targetLanguages)
