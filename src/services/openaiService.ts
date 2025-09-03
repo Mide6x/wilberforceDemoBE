@@ -1,18 +1,11 @@
 import OpenAI from 'openai';
 import { SupportedLanguage, SUPPORTED_LANGUAGES } from '../types';
-import fs from 'fs/promises';
-import { createReadStream, existsSync, mkdirSync, writeFileSync, unlinkSync } from 'fs';
+import fs from 'fs';
 import path from 'path';
-import os from 'os';
 import { Readable } from 'stream';
 
 class OpenAIService {
   private openai: OpenAI;
-  private sessionContexts: Map<string, {
-    fullTranscript: string;
-    audioChunks: Buffer[];
-    lastProcessedTime: number;
-  }> = new Map();
 
   constructor() {
     const apiKey = process.env.OPENAI_API_KEY;
@@ -41,15 +34,15 @@ class OpenAIService {
       
       // Ensure temp directory exists
       const tempDir = path.dirname(tempFilePath);
-      if (!existsSync(tempDir)) {
-        mkdirSync(tempDir, { recursive: true });
+      if (!fs.existsSync(tempDir)) {
+        fs.mkdirSync(tempDir, { recursive: true });
       }
 
       // Write buffer to temporary file
-      writeFileSync(tempFilePath, audioBuffer);
+      fs.writeFileSync(tempFilePath, audioBuffer);
 
       // Create a readable stream from the file with proper filename
-      const audioStream = createReadStream(tempFilePath);
+      const audioStream = fs.createReadStream(tempFilePath);
       
       // Add filename property to the stream for OpenAI
       (audioStream as any).path = tempFilePath;
@@ -63,7 +56,7 @@ class OpenAIService {
       });
 
       // Clean up temporary file
-      unlinkSync(tempFilePath);
+      fs.unlinkSync(tempFilePath);
 
       return transcription.trim();
     } catch (error) {
@@ -114,93 +107,27 @@ class OpenAIService {
   }
 
   /**
-   * Translate text with context for better coherence
-   */
-  private async translateTextWithContext(
-    text: string, 
-    targetLanguage: SupportedLanguage, 
-    context: string
-  ): Promise<string> {
-    try {
-      const targetLanguageName = SUPPORTED_LANGUAGES[targetLanguage];
-      
-      const response = await this.openai.chat.completions.create({
-        model: 'gpt-3.5-turbo',
-        messages: [
-          {
-            role: 'system',
-            content: `You are a professional translator specializing in sermon and religious content. Translate the following text to ${targetLanguageName}. Use the provided context to ensure coherent and contextually appropriate translation. Maintain the original meaning, tone, and religious context. Only return the translation, no explanations.`
-          },
-          {
-            role: 'user',
-            content: `Context: ${context}\n\nTranslate: ${text}`
-          }
-        ],
-        temperature: 0.2,
-        max_tokens: 1000
-      });
-
-      return response.choices[0]?.message?.content?.trim() || text;
-    } catch (error) {
-      console.error('Contextual translation error:', error);
-      // Fallback to regular translation
-      return this.translateText(text, targetLanguage);
-    }
-  }
-
-  /**
-   * Start a new transcription session
-   */
-  startTranscriptionSession(sessionId: string): void {
-    this.sessionContexts.set(sessionId, {
-      fullTranscript: '',
-      audioChunks: [],
-      lastProcessedTime: Date.now()
-    });
-  }
-
-  /**
-   * End transcription session and clean up
-   */
-  endTranscriptionSession(sessionId: string): void {
-    this.sessionContexts.delete(sessionId);
-  }
-
-  /**
-   * Process audio chunk: transcribe and translate if needed independently
+   * Process audio chunk: transcribe and translate if needed
    */
   async processAudioChunk(
-    sessionId: string,
     audioBuffer: Buffer,
     targetLanguages: SupportedLanguage[] = ['en']
   ): Promise<{
     originalText: string;
     translations: Record<string, string>;
-    isComplete: boolean;
   }> {
     try {
-      // Process each audio chunk independently for real-time results
-      const tempFilePath = path.join(os.tmpdir(), `audio-chunk-${sessionId}-${Date.now()}.webm`);
+      // First, transcribe the audio
+      const originalText = await this.transcribeAudio(audioBuffer);
       
-      // Write buffer to temporary file
-      await fs.writeFile(tempFilePath, audioBuffer);
-
-      // Transcribe with OpenAI's latest transcription model
-      const transcription = await this.openai.audio.transcriptions.create({
-        file: createReadStream(tempFilePath),
-        model: 'gpt-4o-transcribe',
-        response_format: 'text'
-      });
-
-      // Clean up temp file
-      await fs.unlink(tempFilePath);
-
-      const originalText = transcription.trim();
-      if (!originalText) {
-        return { originalText: '', translations: {}, isComplete: false };
+      if (!originalText || originalText.trim().length === 0) {
+        return {
+          originalText: '',
+          translations: {}
+        };
       }
 
-      // Translate to all requested languages
+      // Then translate to all requested languages
       const translations: Partial<Record<SupportedLanguage, string>> = {};
       
       for (const language of targetLanguages) {
@@ -219,17 +146,11 @@ class OpenAIService {
 
       return {
         originalText,
-        translations: translations as Record<string, string>,
-        isComplete: false
+        translations: translations as Record<string, string>
       };
     } catch (error) {
-      console.error('Error processing audio chunk:', error);
-      // Return empty result instead of throwing to prevent system from stopping
-      return {
-        originalText: '',
-        translations: {},
-        isComplete: false
-      };
+      console.error('Audio processing error:', error);
+      throw error;
     }
   }
 

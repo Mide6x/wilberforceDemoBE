@@ -84,16 +84,6 @@ class WebSocketService {
         }
       });
 
-      // Handle end transcription (when recording stops)
-      socket.on('end-transcription', async (data: { roomCode: string }) => {
-        try {
-          await this.handleEndTranscription(socket, data.roomCode);
-        } catch (error) {
-          console.error('End transcription error:', error);
-          socket.emit('error', { message: 'Failed to end transcription' });
-        }
-      });
-
       // Handle room ended
       socket.on('room-ended', (data: { roomCode: string }) => {
         console.log(`Room ${data.roomCode} has been ended`);
@@ -274,9 +264,6 @@ class WebSocketService {
 
     this.activeTranscriptions.set(roomCode, true);
     
-    // Start OpenAI transcription session
-    openaiService.startTranscriptionSession(roomCode);
-    
     // Notify all users in the room
     this.io.to(roomCode).emit('transcription-started', { roomCode });
     
@@ -292,31 +279,10 @@ class WebSocketService {
 
     this.activeTranscriptions.set(roomCode, false);
     
-    // End OpenAI transcription session
-    openaiService.endTranscriptionSession(roomCode);
-    
     // Notify all users in the room
     this.io.to(roomCode).emit('transcription-stopped', { roomCode });
     
     console.log(`Transcription stopped for room ${roomCode}`);
-  }
-
-  private async handleEndTranscription(socket: Socket, roomCode: string) {
-    const user = this.connectedUsers.get(socket.id);
-    if (!user || user.role !== 'preacher' || user.roomCode !== roomCode) {
-      socket.emit('error', { message: 'Unauthorized to end transcription' });
-      return;
-    }
-
-    this.activeTranscriptions.set(roomCode, false);
-    
-    // End OpenAI transcription session and clean up
-    openaiService.endTranscriptionSession(roomCode);
-    
-    // Notify all users in the room
-    this.io.to(roomCode).emit('transcription-ended', { roomCode });
-    
-    console.log(`Transcription ended for room ${roomCode}`);
   }
 
   private async handleAudioChunk(socket: Socket, data: { roomCode: string; audioData: ArrayBuffer }) {
@@ -355,20 +321,16 @@ class WebSocketService {
       // Convert ArrayBuffer to Buffer for processing
       const audioBuffer = Buffer.from(audioData);
       
-      // Process audio chunk with OpenAI Whisper using session context
+      // Process audio chunk with OpenAI Whisper
       const result = await openaiService.processAudioChunk(
-        data.roomCode, // Use roomCode as session ID
         audioBuffer,
         Array.from(targetLanguages)
       );
 
       // Only proceed if we got meaningful text
       if (!result.originalText || result.originalText.trim().length === 0) {
-        console.log('No meaningful text from audio chunk, skipping...');
         return;
       }
-
-      console.log('Processed audio chunk:', result.originalText);
 
       // Get room info for database storage
       const room = await databaseService.getRoomByCode(data.roomCode);
