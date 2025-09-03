@@ -364,8 +364,11 @@ class WebSocketService {
 
       // Only proceed if we got meaningful text
       if (!result.originalText || result.originalText.trim().length === 0) {
+        console.log('No meaningful text from audio chunk, skipping...');
         return;
       }
+
+      console.log('Processed audio chunk:', result.originalText);
 
       // Get room info for database storage
       const room = await databaseService.getRoomByCode(data.roomCode);

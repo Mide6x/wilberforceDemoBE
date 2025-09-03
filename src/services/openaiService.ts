@@ -165,7 +165,7 @@ class OpenAIService {
   }
 
   /**
-   * Process audio chunk: transcribe and translate if needed with session context
+   * Process audio chunk: transcribe and translate if needed independently
    */
   async processAudioChunk(
     sessionId: string,
@@ -177,91 +177,59 @@ class OpenAIService {
     isComplete: boolean;
   }> {
     try {
-      const session = this.sessionContexts.get(sessionId);
-      if (!session) {
-        throw new Error('Transcription session not found');
-      }
-
-      // Add audio chunk to session
-      session.audioChunks.push(audioBuffer);
-      session.lastProcessedTime = Date.now();
-
-      // Combine all audio chunks for context-aware transcription
-      const combinedAudio = Buffer.concat(session.audioChunks);
+      // Process each audio chunk independently for real-time results
+      const tempFilePath = path.join(os.tmpdir(), `audio-chunk-${sessionId}-${Date.now()}.webm`);
       
-      // Create a temporary file for the combined audio
-      const tempFilePath = path.join(__dirname, '../../temp', `audio-session-${sessionId}-${Date.now()}.webm`);
-      
-      // Ensure temp directory exists
-      const tempDir = path.dirname(tempFilePath);
-      if (!fs.existsSync(tempDir)) {
-        fs.mkdirSync(tempDir, { recursive: true });
-      }
-
       // Write buffer to temporary file
-      fs.writeFileSync(tempFilePath, combinedAudio);
+      await fs.writeFile(tempFilePath, audioBuffer);
 
-      // Create a readable stream from the file with proper filename
-      const audioStream = fs.createReadStream(tempFilePath);
-      
-      // Add filename property to the stream for OpenAI
-      (audioStream as any).path = tempFilePath;
-
-      // Transcribe with Whisper using full context
+      // Transcribe with Whisper
       const transcription = await this.openai.audio.transcriptions.create({
-        file: audioStream,
+        file: createReadStream(tempFilePath),
         model: 'whisper-1',
         language: 'en',
         response_format: 'text',
-        temperature: 0.2
+        temperature: 0.1
       });
 
       // Clean up temp file
-      fs.unlinkSync(tempFilePath);
+      await fs.unlink(tempFilePath);
 
-      const fullText = transcription.trim();
-      if (!fullText) {
+      const originalText = transcription.trim();
+      if (!originalText) {
         return { originalText: '', translations: {}, isComplete: false };
       }
 
-      // Extract only the new part of the transcript
-      const newText = fullText.replace(session.fullTranscript, '').trim();
-      session.fullTranscript = fullText;
-
-      if (!newText) {
-        return { originalText: '', translations: {}, isComplete: false };
-      }
-
-      // Translate the new text
+      // Translate to all requested languages
       const translations: Partial<Record<SupportedLanguage, string>> = {};
       
       for (const language of targetLanguages) {
         if (language === 'en') {
-          translations[language] = newText;
+          translations[language] = originalText;
         } else {
           try {
-            translations[language] = await this.translateText(newText, language);
+            translations[language] = await this.translateText(originalText, language);
           } catch (error) {
             console.error(`Failed to translate to ${language}:`, error);
             // Fallback to original text if translation fails
-            translations[language] = newText;
+            translations[language] = originalText;
           }
         }
       }
 
-      // Keep only recent audio chunks to prevent memory issues (last 10 chunks)
-      if (session.audioChunks.length > 10) {
-        session.audioChunks = session.audioChunks.slice(-10);
-      }
-
       return {
-        originalText: newText,
+        originalText,
         translations: translations as Record<string, string>,
         isComplete: false
       };
     } catch (error) {
-      console.error('Audio processing error:', error);
-      throw error;
+      console.error('Error processing audio chunk:', error);
+      // Return empty result instead of throwing to prevent system from stopping
+      return {
+        originalText: '',
+        translations: {},
+        isComplete: false
+      };
     }
   }
 
