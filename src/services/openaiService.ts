@@ -183,13 +183,11 @@ class OpenAIService {
       // Write buffer to temporary file
       await fs.writeFile(tempFilePath, audioBuffer);
 
-      // Transcribe with Whisper
+      // Transcribe with OpenAI's latest transcription model
       const transcription = await this.openai.audio.transcriptions.create({
         file: createReadStream(tempFilePath),
-        model: 'whisper-1',
-        language: 'en',
-        response_format: 'text',
-        temperature: 0.1
+        model: 'gpt-4o-transcribe',
+        response_format: 'text'
       });
 
       // Clean up temp file
