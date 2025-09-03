@@ -1,7 +1,9 @@
 import OpenAI from 'openai';
 import { SupportedLanguage, SUPPORTED_LANGUAGES } from '../types';
-import fs from 'fs';
+import fs from 'fs/promises';
+import { createReadStream, existsSync, mkdirSync, writeFileSync, unlinkSync } from 'fs';
 import path from 'path';
+import os from 'os';
 import { Readable } from 'stream';
 
 class OpenAIService {
@@ -39,15 +41,15 @@ class OpenAIService {
       
       // Ensure temp directory exists
       const tempDir = path.dirname(tempFilePath);
-      if (!fs.existsSync(tempDir)) {
-        fs.mkdirSync(tempDir, { recursive: true });
+      if (!existsSync(tempDir)) {
+        mkdirSync(tempDir, { recursive: true });
       }
 
       // Write buffer to temporary file
-      fs.writeFileSync(tempFilePath, audioBuffer);
+      writeFileSync(tempFilePath, audioBuffer);
 
       // Create a readable stream from the file with proper filename
-      const audioStream = fs.createReadStream(tempFilePath);
+      const audioStream = createReadStream(tempFilePath);
       
       // Add filename property to the stream for OpenAI
       (audioStream as any).path = tempFilePath;
@@ -61,7 +63,7 @@ class OpenAIService {
       });
 
       // Clean up temporary file
-      fs.unlinkSync(tempFilePath);
+      unlinkSync(tempFilePath);
 
       return transcription.trim();
     } catch (error) {
