@@ -77,19 +77,48 @@ class OpenAIService {
 
       const targetLanguageName = SUPPORTED_LANGUAGES[targetLanguage];
       
-      const completion = await this.openai.chat.completions.create({
-        model: 'gpt-3.5-turbo',
+      // First, correct any speech recognition errors
+      const correctionCompletion = await this.openai.chat.completions.create({
+        model: 'gpt-4o',
         messages: [
           {
             role: 'system',
-            content: `You are a professional translator. Translate the given text to ${targetLanguageName}. Maintain the original meaning, tone, and context. If the text is already in ${targetLanguageName}, return it as is. Only return the translated text, no explanations or additional content.`
+            content: `You are an expert text correction assistant specializing in religious and biblical content. Your task is to correct speech recognition errors in transcribed text, particularly for sermons, biblical passages, and religious discourse.
+
+Common corrections needed:
+- "Shall I buy" → "Shall abide"
+- "Lord" vs "Lord" (proper capitalization)
+- Biblical names and places
+- Religious terminology
+- Common mishearings in religious context
+
+Correct any obvious speech recognition errors while preserving the original meaning and religious context. If the text appears correct, return it unchanged. Only return the corrected text, no explanations.`
           },
           {
             role: 'user',
             content: text
           }
         ],
-        temperature: 0.3,
+        temperature: 0.1,
+        max_tokens: 1000
+      });
+
+      const correctedText = correctionCompletion.choices[0]?.message?.content?.trim() || text;
+
+      // Then translate the corrected text
+      const completion = await this.openai.chat.completions.create({
+        model: 'gpt-4o',
+        messages: [
+          {
+            role: 'system',
+            content: `You are a professional translator specializing in religious and biblical content. Translate the given text to ${targetLanguageName}. Maintain the original meaning, tone, religious context, and reverence. If the text is already in ${targetLanguageName}, return it as is. Preserve biblical references, proper names, and religious terminology appropriately. Only return the translated text, no explanations or additional content.`
+          },
+          {
+            role: 'user',
+            content: correctedText
+          }
+        ],
+        temperature: 0.2,
         max_tokens: 1000
       });
 
