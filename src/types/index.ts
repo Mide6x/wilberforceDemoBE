@@ -63,6 +63,7 @@ export const SUPPORTED_LANGUAGES = {
   'ha': 'Hausa',
   'hi': 'Hindi',
   'it': 'Italian',
+  'jam': 'Jamaican Patois',
   'ja': 'Japanese',
   'ko': 'Korean',
   'mfe': 'Mauritian Creole',
